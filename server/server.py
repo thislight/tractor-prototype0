@@ -37,11 +37,15 @@ class DirectoryServerStore(object):
         self.files: Dict[str, VirtualFile] = {}
 
 def ping_handler(store: DirectoryServerStore, sock: Socket, argframes: List[Frame], id_frame: Frame) -> None:
-    device_name = str(argframes.pop(0).bytes, encoding='utf8')
-    reply = [id_frame, Frame(), Frame(sock.getsockopt_string("Peer-Address"))]
+    device_name_frame = argframes.pop(0)
+    device_name = str(device_name_frame.bytes, encoding='utf8')
+    peer_addr = device_name_frame.get("Peer-Address")
+    print("Ping from {}".format(peer_addr))
+    reply = [id_frame, Frame(), Frame(b"pong"), Frame(bytes(peer_addr, encoding='utf8'))]
     sock.send_multipart(reply)
     if device_name not in store.devices:
         store.devices[device_name] = Device(device_name, [])
+        print("New device {} is created".format(device_name))
 
 def casting_address_handler(store: DirectoryServerStore, sock: Socket, argframes: List[Frame], id_frame: Frame) -> None:
     device_name = str(argframes.pop(0).bytes, encoding='utf8')
@@ -50,8 +54,9 @@ def casting_address_handler(store: DirectoryServerStore, sock: Socket, argframes
         store.devices[device_name] = Device(device_name, [])
     device = store.devices[device_name]
     if address not in device.cast_addresses:
-        device_name.cast_addresses.append(address)
-    reply = [id_frame, Frame(), Frame(0)]
+        device.cast_addresses.append(address)
+        print("Device {} casted entry point {}".format(device_name, address))
+    reply = [id_frame, Frame(), Frame(bytes([0]))]
     sock.send_multipart(reply)
 
 def get_addresses_handler(store: DirectoryServerStore, sock: Socket, argframes: List[Frame], id_frame: Frame) -> None:
@@ -75,12 +80,12 @@ def file_declare_handler(store: DirectoryServerStore, sock: Socket, argframes: L
     filename = str(argframes.pop(0).bytes, encoding='utf8')
     if filename not in store.files:
         store.files[filename] = VirtualFile(filename, [])
-        changes_pub.send([Frame("fs.new_file"), Frame(filename)])
+        changes_pub.send([Frame(b"fs.new_file"), Frame(bytes(filename, 'utf8'))])
     vfile = store.files[filename]
     device = store.devices.get(device_name, None)
     if device and (device not in vfile.declared_devices):
         vfile.declared_devices.append(device_name)
-    sock.send_multipart([id_frame, Frame(), Frame(0)])
+    sock.send_multipart([id_frame, Frame(), Frame(bytes([0]))])
 
 def file_disown_handler(store: DirectoryServerStore, sock: Socket, argframes: List[Frame], id_frame: Frame, changes_pub: Socket) -> None:
     device_name = str(argframes.pop(0).bytes, encoding='utf8')
@@ -92,21 +97,23 @@ def file_disown_handler(store: DirectoryServerStore, sock: Socket, argframes: Li
             vfile.declared_devices.remove(device)
         if len(vfile.declared_devices) == 0:
             store.files.pop(filename)
-            changes_pub.send_multipart([Frame("fs.delete_file", Frame(filename))])
-        sock.send_multipart([id_frame, Frame(), Frame(0)])
+            changes_pub.send_multipart([Frame(b"fs.delete_file", Frame(filename))])
+        sock.send_multipart([id_frame, Frame(), Frame(bytes([0]))])
     else:
-        sock.send_multipart([id_frame, Frame(), Frame(1)])
+        sock.send_multipart([id_frame, Frame(), Frame(bytes([1]))])
 
 def file_get_handler(store: DirectoryServerStore, sock: Socket, argframes: List[Frame], id_frame: Frame) -> None:
     filename = str(argframes.pop(0).bytes, encoding='utf8')
     if filename in store.files:
         vfile = store.files[filename]
-        sock.send_multipart([id_frame, Frame(), Frame(0), Frame(json.dumps(vfile))])
+        device_names = list(map(lambda d: d.name, vfile.declared_devices))
+        sock.send_multipart([id_frame, Frame(), Frame(bytes([0])), Frame(bytes(json.dumps(device_names), 'utf8'))])
     else:
-        sock.send_multipart([id_frame, Frame(), Frame(1)])
+        sock.send_multipart([id_frame, Frame(), Frame(bytes([1]))])
 
 def directory_server(store: DirectoryServerStore, zmq_context: Context):
     # pylint: disable=no-member # These zmq.ROUTER and zmq.PUB must be actually exists
+    print("Starting on libzmq {} with PyZMQ {}".format(zmq.zmq_version(), zmq.pyzmq_version()))
     entrypoint: Socket = zmq_context.socket(zmq.ROUTER)
     entrypoint.bind("tcp://127.0.0.1:5350") # This is just a PROTOTYPE!
     pub_file_changes: Socket = zmq_context.socket(zmq.PUB)
@@ -116,8 +123,8 @@ def directory_server(store: DirectoryServerStore, zmq_context: Context):
     print("Directory server is started on 127.0.0.1:5350 (commands) and 127.0.0.1:5351 (file_changes_push)")
     while True:
         events: List[Tuple[Socket, int]] = poller.poll(1)
-        for socket, in events:
-            frames: List[Frame] = socket.recv_multipart()
+        for socket, _ in events:
+            frames: List[Frame] = socket.recv_multipart(copy=False)
             id_frame: Frame = frames.pop(0)
             empty_frame: Frame = frames.pop(0)
             assert(len(empty_frame.bytes) == 0)
