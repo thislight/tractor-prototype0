@@ -30,6 +30,7 @@ class Device(object):
 class VirtualFile(object):
     name: str
     declared_devices: List[Device]
+    refcount: int
 
 class DirectoryServerStore(object):
     def __init__(self):
@@ -79,12 +80,14 @@ def file_declare_handler(store: DirectoryServerStore, sock: Socket, argframes: L
     device_name = str(argframes.pop(0).bytes, encoding='utf8')
     filename = str(argframes.pop(0).bytes, encoding='utf8')
     if filename not in store.files:
-        store.files[filename] = VirtualFile(filename, [])
+        store.files[filename] = VirtualFile(filename, [], 0)
         changes_pub.send([Frame(b"fs.new_file"), Frame(bytes(filename, 'utf8'))])
     vfile = store.files[filename]
     device = store.devices.get(device_name, None)
     if device and (device not in vfile.declared_devices):
         vfile.declared_devices.append(device_name)
+        if not device_name.startswith("storage"): # In reality we may use another way to identify if we need to count reference for the device
+            vfile.refcount += 1
     sock.send_multipart([id_frame, Frame(), Frame(bytes([0]))])
 
 def file_disown_handler(store: DirectoryServerStore, sock: Socket, argframes: List[Frame], id_frame: Frame, changes_pub: Socket) -> None:
@@ -95,6 +98,8 @@ def file_disown_handler(store: DirectoryServerStore, sock: Socket, argframes: Li
         device = store.devices[device_name]
         if device in vfile.declared_devices:
             vfile.declared_devices.remove(device)
+            if not device_name.startswith("storage"):
+                vfile.refcount -= 1
         if len(vfile.declared_devices) == 0:
             store.files.pop(filename)
             changes_pub.send_multipart([Frame(b"fs.delete_file", Frame(filename))])
