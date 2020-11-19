@@ -100,7 +100,7 @@ def file_disown_handler(store: DirectoryServerStore, sock: Socket, argframes: Li
             vfile.declared_devices.remove(device)
             if not device_name.startswith("storage"):
                 vfile.refcount -= 1
-        if len(vfile.declared_devices) == 0:
+        if vfile.refcount == 0:
             store.files.pop(filename)
             changes_pub.send_multipart([Frame(b"fs.delete_file", Frame(filename))])
         sock.send_multipart([id_frame, Frame(), Frame(bytes([0]))])
