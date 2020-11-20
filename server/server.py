@@ -79,9 +79,11 @@ def file_list_handler(store: DirectoryServerStore, sock: Socket, id_frame: Frame
 def file_declare_handler(store: DirectoryServerStore, sock: Socket, argframes: List[Frame], id_frame: Frame, changes_pub: Socket) -> None:
     device_name = str(argframes.pop(0).bytes, encoding='utf8')
     filename = str(argframes.pop(0).bytes, encoding='utf8')
+    new_file_flag = False
     if filename not in store.files:
         store.files[filename] = VirtualFile(filename, [], 0)
-        changes_pub.send([Frame(b"fs.new_file"), Frame(bytes(filename, 'utf8'))])
+        print("New file {} created".format(filename))
+        new_file_flag = True
     vfile = store.files[filename]
     device = store.devices.get(device_name, None)
     if device and (device not in vfile.declared_devices):
@@ -89,6 +91,9 @@ def file_declare_handler(store: DirectoryServerStore, sock: Socket, argframes: L
         if not device_name.startswith("storage"): # In reality we may use another way to identify if we need to count reference for the device
             vfile.refcount += 1
     sock.send_multipart([id_frame, Frame(), Frame(bytes([0]))])
+    if new_file_flag:
+        changes_pub.send_multipart([Frame(b"fs.new_file"), Frame(bytes(filename, 'utf8'))])
+        print("fs.new_file is sent")
 
 def file_disown_handler(store: DirectoryServerStore, sock: Socket, argframes: List[Frame], id_frame: Frame, changes_pub: Socket) -> None:
     device_name = str(argframes.pop(0).bytes, encoding='utf8')
@@ -127,7 +132,7 @@ def directory_server(store: DirectoryServerStore, zmq_context: Context):
     poller.register(entrypoint, flags=zmq.POLLIN)
     print("Directory server is started on 127.0.0.1:5350 (commands) and 127.0.0.1:5351 (file_changes_push)")
     while True:
-        events: List[Tuple[Socket, int]] = poller.poll(1)
+        events: List[Tuple[Socket, int]] = poller.poll()
         for socket, _ in events:
             frames: List[Frame] = socket.recv_multipart(copy=False)
             id_frame: Frame = frames.pop(0)

@@ -1,17 +1,3 @@
-"""
-This is Storage Server
-Storage Servers are actually client as the view of Directory Server.
-The only point is, Storage Servers should declare all the files they have on Directory Server.
-NOTICE: Actually there is not "Storage Server", this is a name to identified to the other clients.
-The mainly part of the implementation is the file protocol, for now it's unclear and i would use a very simple overall implementation (send the whole 'file' in one frame).
-All at all it's just a prototype. ;)
-In the complete implementation, other clients should be verified to get the files. I will not cover that in this prototype.
-This implementation use zeromq, too.
-Opened Port(s):
-* ROUTER 5354 (command port)
-Command(s):
-* fs.read_file | filename: str -> 0 | content: bytes
-"""
 import asyncio
 import zmq
 import json
@@ -19,6 +5,7 @@ from dataclasses import dataclass
 from zmq import Frame
 from zmq.asyncio import Socket, Context, Poller
 from typing import List, Iterable, Dict, Tuple
+from cmd import Cmd
 
 @dataclass
 class VirtualFile(object):
@@ -89,49 +76,51 @@ async def disown_file(sock: Socket, filename: str, device_name: str) -> None:
     await sock.send_multipart([b"fs.disown", bytes(device_name, 'utf8'), bytes(filename, 'utf8')])
     await sock.recv_multipart() # Eat result sliently
 
-async def new_file_event_callback(store: StorageServerStore, argframes: List[Frame], dirserv_sock: Socket, context: Context, device_name: str) -> None:
-    filename = str(argframes.pop(0).bytes, 'utf8')
-    store.files[filename] = VirtualFile(filename, None, [])
-    print("New virtual file '{}' added".format(filename))
-    store.files[filename].content = await download_file(context, dirserv_sock, filename)
-    await declare_file(dirserv_sock, filename, device_name)
-
-async def delete_file_event_callback(store: StorageServerStore, argframes: List[Frame], dirserv_sock: Socket, device_name: str) -> None:
-    filename = str(argframes.pop(0).bytes, 'utf8')
-    store.files.pop(filename)
-    await disown_file(dirserv_sock, filename, device_name)
-
 async def read_file_handler(store: StorageServerStore, argframes: List[Frame], sock: Socket, id_frame: Frame):
     filename = str(argframes.pop(0).bytes, 'utf8')
+    print("Read file {}".format(filename))
     vfile = store.files.get(filename, None)
     if vfile:
         sock.send_multipart([id_frame, Frame(), bytes([0]), vfile.content])
     else:
         sock.send(bytes([0]))
 
-
-async def storage_server(store: StorageServerStore, context: Context, name: str):
+async def app(store: StorageServerStore, context: Context, name: str, command: str, arg: str):
     print("Starting...")
     dirserv_commands = context.socket(zmq.REQ)
     dirserv_commands.connect("tcp://127.0.0.1:5350")
     self_addr = await asyncio.wait_for(ping(dirserv_commands, name), 5)
     print("Directory server report this client is run on {}".format(self_addr))
-    self_entrypoint_addr = "tcp://{}:{}".format(self_addr, 5354)
-    command_port = context.socket(zmq.ROUTER)
-    command_port.bind("tcp://127.0.0.1:5354")
+    command_port: Socket = context.socket(zmq.ROUTER)
+    port = command_port.bind_to_random_port("tcp://127.0.0.1")
+    self_entrypoint_addr = "tcp://{}:{}".format(self_addr, port)
     await asyncio.wait_for(cast_address(dirserv_commands, name, self_entrypoint_addr), 5)
     print("Address {} casted on directory server".format(self_entrypoint_addr))
-    file_changes_sub = context.socket(zmq.SUB)
-    file_changes_sub.connect("tcp://127.0.0.1:5351")
     poller = Poller()
-    poller.register(file_changes_sub, zmq.POLLIN)
     poller.register(command_port, zmq.POLLIN)
-    print("Storage server is started")
+    print("App is started")
+    if command == "declare":
+        with open(arg, mode='r') as f:
+            store.files[arg] = f.read()
+        await declare_file(dirserv_commands, arg, name)
+        print("File {} is declared".format(arg))
+    elif command == "disown":
+        await disown_file(dirserv_commands, arg, name)
+        context.destory()
+        return
+    elif command == "show":
+        content = await download_file(context, dirserv_commands, arg)
+        print(str(content, 'utf8'))
+        context.destory()
+        return
+    else:
+        print("Unknown command {}".format(command))
+        context.destory()
+        return
     while True:
         events: List[Tuple[Socket, int]] = await poller.poll()
         for socket, mark in events:
             frames: List[Frame] = await socket.recv_multipart(copy=False)
-            print(frames)
             id_frame = frames.pop(0)
             frames.pop(0)
             command_frame = frames.pop(0)
@@ -139,21 +128,16 @@ async def storage_server(store: StorageServerStore, context: Context, name: str)
             if socket == command_port:
                 if command == 'fs.read_file':
                     await read_file_handler(store, frames, socket, id_frame)
-            elif socket == file_changes_sub:
-                print("File change received")
-                if command == 'fs.delete_file':
-                    await delete_file_event_callback(store, frames, dirserv_commands, name)
-                elif command == 'fs.new_file':
-                    await new_file_event_callback(store, frames, dirserv_commands, context)
 
 
 def main():
     import sys
-    name = sys.argv[1]
+    command = sys.argv[1]
+    arg = sys.argv[2]
     store = StorageServerStore()
     context = Context()
     try:
-        asyncio.run(storage_server(store, context, "storage+" + name))
+        asyncio.run(app(store, context, "app", command, arg))
     except KeyboardInterrupt:
         context.destroy()
         print('')
