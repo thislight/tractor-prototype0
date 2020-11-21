@@ -14,6 +14,14 @@
 
     You should have received a copy of the GNU Affero General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+This is a smaple application.
+As you can see, this most of this file is copied from storage server. It shows that the storage server actually is client in the design.
+
+Usage:
+* `python app.py declare testdata1.txt`: read `testdata1.txt` into a ramfs-like space and declare the app has it on directory server
+* `python app.py disown testdata1.txt`: disown `testdata1.txt` on directory server
+* `python app.py show testdata1.txt`: show the content of testdata1.txt on remote server
 """
 import asyncio
 import zmq
