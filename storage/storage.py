@@ -76,7 +76,7 @@ async def download_file(context: Context, dirserv_sock: Socket, filename: str) -
     # This is just a sample protocol, and it does not need complex functions to deal with big contents
     download_sock.close()
     if frames[0][0] == 0:
-        return frames.pop[1]
+        return frames.pop(1)
     else:
         return None
 
@@ -123,6 +123,7 @@ async def storage_server(store: StorageServerStore, context: Context, name: str)
     print("Address {} casted on directory server".format(self_entrypoint_addr))
     file_changes_sub = context.socket(zmq.SUB)
     file_changes_sub.connect("tcp://127.0.0.1:5351")
+    file_changes_sub.setsockopt(zmq.SUBSCRIBE, b"fs")
     poller = Poller()
     poller.register(file_changes_sub, zmq.POLLIN)
     poller.register(command_port, zmq.POLLIN)
@@ -131,20 +132,21 @@ async def storage_server(store: StorageServerStore, context: Context, name: str)
         events: List[Tuple[Socket, int]] = await poller.poll()
         for socket, mark in events:
             frames: List[Frame] = await socket.recv_multipart(copy=False)
-            print(frames)
-            id_frame = frames.pop(0)
-            frames.pop(0)
-            command_frame = frames.pop(0)
-            command = str(command_frame.bytes, 'utf8')
             if socket == command_port:
+                id_frame = frames.pop(0)
+                frames.pop(0)
+                command_frame = frames.pop(0)
+                command = str(command_frame.bytes, 'utf8')
                 if command == 'fs.read_file':
                     await read_file_handler(store, frames, socket, id_frame)
             elif socket == file_changes_sub:
-                print("File change received")
+                command_frame = frames.pop(0)
+                command = str(command_frame.bytes, 'utf8')
+                print("File change received: {}".format(command))
                 if command == 'fs.delete_file':
                     await delete_file_event_callback(store, frames, dirserv_commands, name)
                 elif command == 'fs.new_file':
-                    await new_file_event_callback(store, frames, dirserv_commands, context)
+                    await new_file_event_callback(store, frames, dirserv_commands, context, name)
 
 
 def main():

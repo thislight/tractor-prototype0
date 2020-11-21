@@ -65,7 +65,7 @@ def get_addresses_handler(store: DirectoryServerStore, sock: Socket, argframes: 
     if device_name in store.devices:
         device = store.devices[device_name]
         playload = json.dumps(device.cast_addresses)
-        reply = [id_frame, Frame(), Frame(0), Frame(playload)]
+        reply = [id_frame, Frame(), Frame(bytes([0])), Frame(bytes(playload, 'utf8'))]
         sock.send_multipart(reply)
     else:
         reply = [id_frame, Frame(), Frame(1)]
@@ -87,7 +87,7 @@ def file_declare_handler(store: DirectoryServerStore, sock: Socket, argframes: L
     vfile = store.files[filename]
     device = store.devices.get(device_name, None)
     if device and (device not in vfile.declared_devices):
-        vfile.declared_devices.append(device_name)
+        vfile.declared_devices.append(device)
         if not device_name.startswith("storage"): # In reality we may use another way to identify if we need to count reference for the device
             vfile.refcount += 1
     sock.send_multipart([id_frame, Frame(), Frame(bytes([0]))])
