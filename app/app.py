@@ -63,7 +63,7 @@ async def download_file(context: Context, dirserv_sock: Socket, filename: str) -
     # This is just a sample protocol, and it does not need complex functions to deal with big contents
     download_sock.close()
     if frames[0][0] == 0:
-        return frames.pop[1]
+        return frames.pop(1)
     else:
         return None
 
@@ -89,45 +89,47 @@ async def app(store: StorageServerStore, context: Context, name: str, command: s
     print("Starting...")
     dirserv_commands = context.socket(zmq.REQ)
     dirserv_commands.connect("tcp://127.0.0.1:5350")
-    self_addr = await asyncio.wait_for(ping(dirserv_commands, name), 5)
-    print("Directory server report this client is run on {}".format(self_addr))
-    command_port: Socket = context.socket(zmq.ROUTER)
-    port = command_port.bind_to_random_port("tcp://127.0.0.1")
-    self_entrypoint_addr = "tcp://{}:{}".format(self_addr, port)
-    await asyncio.wait_for(cast_address(dirserv_commands, name, self_entrypoint_addr), 5)
-    print("Address {} casted on directory server".format(self_entrypoint_addr))
-    poller = Poller()
-    poller.register(command_port, zmq.POLLIN)
     print("App is started")
     if command == "declare":
-        with open(arg, mode='r') as f:
-            store.files[arg] = f.read()
+        self_addr = await asyncio.wait_for(ping(dirserv_commands, name), 5)
+        print("Directory server report this client is run on {}".format(self_addr))
+        command_port: Socket = context.socket(zmq.ROUTER)
+        port = command_port.bind_to_random_port("tcp://127.0.0.1")
+        self_entrypoint_addr = "tcp://{}:{}".format(self_addr, port)
+        await asyncio.wait_for(cast_address(dirserv_commands, name, self_entrypoint_addr), 5)
+        print("Address {} casted on directory server".format(self_entrypoint_addr))
+        with open(arg, mode='rb') as f:
+            store.files[arg] = VirtualFile(arg, f.read(), [])
         await declare_file(dirserv_commands, arg, name)
-        print("File {} is declared".format(arg))
+        print("File {} is declared, serving file...".format(arg))
+        poller = Poller()
+        poller.register(command_port, zmq.POLLIN)
+        while True:
+            events: List[Tuple[Socket, int]] = await poller.poll()
+            for socket, mark in events:
+                frames: List[Frame] = await socket.recv_multipart(copy=False)
+                id_frame = frames.pop(0)
+                frames.pop(0)
+                command_frame = frames.pop(0)
+                command = str(command_frame.bytes, 'utf8')
+                if socket == command_port:
+                    if command == 'fs.read_file':
+                        await read_file_handler(store, frames, socket, id_frame)
     elif command == "disown":
         await disown_file(dirserv_commands, arg, name)
         context.destory()
         return
     elif command == "show":
         content = await download_file(context, dirserv_commands, arg)
+        print("==== Content of '{}' ====".format(arg))
         print(str(content, 'utf8'))
-        context.destory()
+        context.destroy()
         return
     else:
         print("Unknown command {}".format(command))
-        context.destory()
+        context.destroy()
         return
-    while True:
-        events: List[Tuple[Socket, int]] = await poller.poll()
-        for socket, mark in events:
-            frames: List[Frame] = await socket.recv_multipart(copy=False)
-            id_frame = frames.pop(0)
-            frames.pop(0)
-            command_frame = frames.pop(0)
-            command = str(command_frame.bytes, 'utf8')
-            if socket == command_port:
-                if command == 'fs.read_file':
-                    await read_file_handler(store, frames, socket, id_frame)
+    
 
 
 def main():
