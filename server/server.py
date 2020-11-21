@@ -107,7 +107,9 @@ def file_disown_handler(store: DirectoryServerStore, sock: Socket, argframes: Li
                 vfile.refcount -= 1
         if vfile.refcount == 0:
             store.files.pop(filename)
-            changes_pub.send_multipart([Frame(b"fs.delete_file", Frame(filename))])
+            print("File {} is deleted".format(filename))
+            changes_pub.send_multipart([b"fs.delete_file", bytes(filename, 'utf8')])
+            print("fs.delete_file is sent")
         sock.send_multipart([id_frame, Frame(), Frame(bytes([0]))])
     else:
         sock.send_multipart([id_frame, Frame(), Frame(bytes([1]))])
