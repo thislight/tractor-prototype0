@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from zmq import Frame
 from zmq.asyncio import Socket, Context, Poller
 from typing import List, Iterable, Dict, Tuple
-from cmd import Cmd
+from random import choice
 
 @dataclass
 class VirtualFile(object):
@@ -54,12 +54,13 @@ async def download_file(context: Context, dirserv_sock: Socket, filename: str) -
     for dev_name in devices:
         addresses = await get_devices_declared_addresses(dirserv_sock, dev_name)
         all_declared_addresses += addresses
-    used_address = all_declared_addresses[0] # we use only one connection to 'download' files here,
+    used_address = choice(all_declared_addresses)# we use only one connection to 'download' files here,
     # but a complete implementation must download them from different devices to speed up the process
+    print("download_file(): using address {}".format(used_address))
     download_sock: Socket = context.socket(zmq.REQ)
     download_sock.connect(used_address)
     await download_sock.send_multipart([b"fs.read_file", bytes(filename, 'utf8')])
-    frames: List[bytes] = await download_sock.recv_multipart()
+    frames: List[bytes] = await asyncio.wait_for(download_sock.recv_multipart(), 5)
     # This is just a sample protocol, and it does not need complex functions to deal with big contents
     download_sock.close()
     if frames[0][0] == 0:
@@ -117,7 +118,7 @@ async def app(store: StorageServerStore, context: Context, name: str, command: s
                         await read_file_handler(store, frames, socket, id_frame)
     elif command == "disown":
         await disown_file(dirserv_commands, arg, name)
-        context.destory()
+        context.destroy()
         return
     elif command == "show":
         content = await download_file(context, dirserv_commands, arg)
